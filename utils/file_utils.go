@@ -14,26 +14,56 @@
 package utils
 
 import (
+	"io/fs"
 	"os"
-	"path"
+	"path/filepath"
+	"strings"
 )
 
-// FileDirReader returns all files inside a given directory
-// as a StringArrayReader
-func NewFileDirReader(fileDir string) (*StringArrayReader, error) {
-	files, err := os.ReadDir(fileDir)
+// NewFileDirReader reads all files from the given directory `fileDir`.
+// It can optionally traverse subdirectories if `recursive` is true,
+// and will limit recursion to `maxDepth` levels if specified.
+//
+// Uses the standard library's `filepath.WalkDir` to traverse directories efficiently,
+// and `fs.SkipDir` to skip directories when recursion is disabled or maxDepth is reached.
+func NewFileDirReader(fileDir string, recursive bool, maxDepth int) (*StringArrayReader, error) {
+	var filePaths []string
+	rootDepth := pathDepth(fileDir)
+
+	// filePaths is safely appended within WalkDir because WalkDir executes the callback sequentially.
+	// No race conditions occur in this implementation, even with slice reallocation.
+	err := filepath.WalkDir(fileDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !d.IsDir() {
+			filePaths = append(filePaths, path)
+			return nil
+		}
+
+		currentDepth := pathDepth(path) - rootDepth
+		// we skip directory if recursive is disabled or
+		// if we reached configured maxDepth
+		if !recursive && path != fileDir ||
+			currentDepth >= maxDepth {
+			return fs.SkipDir
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-	fileNames := []string{}
-	for _, f := range files {
-		// Skip subdirectories
-		if f.IsDir() {
-			continue
-		}
-		fileNames = append(fileNames, path.Join(fileDir, f.Name()))
-	}
-	return &StringArrayReader{strings: fileNames}, nil
+	return &StringArrayReader{strings: filePaths}, nil
+}
+
+// pathDepth returns the depth of a given path by counting its components.
+// It uses filepath.Separator, which ensures correct behavior across all platforms
+// (Windows, macOS, Linux), regardless of the underlying path separator.
+func pathDepth(path string) int {
+	return len(strings.Split(filepath.Clean(path), string(filepath.Separator)))
 }
 
 // IsDir function returns whether a file is a directory or not
